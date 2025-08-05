@@ -76,9 +76,9 @@ DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': 'my_database',
-        'USER': 'root',
-        'PASSWORD': 'root',
-        'HOST': 'localhost',
+        'USER': 'ptt_rag',
+        'PASSWORD': 'ptt_rag',
+        'HOST': 'my_mariadb',
         'PORT': '3306',
     }
 }
