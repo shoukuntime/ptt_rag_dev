@@ -1,3 +1,9 @@
+import os
+import django
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'ptt_rag_dev.settings')
+django.setup()
+
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
@@ -62,12 +68,27 @@ def ptt_scrape(board: str) -> list:
     for article_url in article_urls:
         article_html = get_html(article_url)  # 由文章網址取得 html
         article_data = get_data_from_article_html(article_html)  # 由文章 html 取得文章資訊
-        article_data.update({'board': board})  # 加入版面名稱資訊
+        article_data.update({'board': board, 'url': article_url})  # 加入版面名稱資訊與網址
         article_datas.append(article_data)  # 將文章資訊蒐集起來
     return article_datas  # 回傳文章資訊列表
 
 
 if __name__ == "__main__":
+    from article.models import Article
+    from django.db.utils import IntegrityError
+
     article_datas = ptt_scrape("Gossiping")
     for article_data in article_datas:
         print(article_data)
+        try:
+            Article.objects.create(
+                board=article_data['board'],
+                title=article_data["title"],
+                author=article_data["author"],
+                url=article_data["url"],
+                content=article_data["content"],
+                post_time=article_data["post_time"]
+            )
+        except IntegrityError:
+            print("寫入錯誤!")
+    print('完成所有寫入!')
