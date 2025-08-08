@@ -13,6 +13,7 @@ services:
       - "8000:8000"
     depends_on:
       - mariadb
+      - redis
 
   mariadb:
     image: mariadb:11.7.2
@@ -28,3 +29,34 @@ services:
       - "3307:3306"
     volumes:
       - ./mariadb_data:/var/lib/mysql
+
+  redis:
+    image: redis:latest
+    container_name: my_redis
+    restart: always
+    ports:
+      - "6379:6379"
+
+  celery:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery_worker
+    command: celery -A ptt_rag_dev worker -l info
+    volumes:
+      - .:/app
+    depends_on:
+      - mariadb
+      - redis
+
+  celery-beat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: celery_beat
+    command: celery -A ptt_rag_dev beat -l info
+    volumes:
+      - .:/app
+    depends_on:
+      - mariadb
+      - redis
