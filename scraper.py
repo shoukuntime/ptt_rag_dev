@@ -8,6 +8,7 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from article.models import Article
 
 
 def get_html(url: str) -> str:
@@ -64,31 +65,22 @@ def ptt_scrape(board: str) -> list:
     board_url = 'https://www.ptt.cc/bbs/' + board + '/index.html'  # 首先建立看板網址
     board_html = get_html(board_url)  # 由看板網址取得 html
     article_urls = get_urls_from_board_html(board_html)  # 由看板 html 取得文章網址
-    article_datas = []
+    article_id_list=[]
     for article_url in article_urls:
         article_html = get_html(article_url)  # 由文章網址取得 html
         article_data = get_data_from_article_html(article_html)  # 由文章 html 取得文章資訊
-        article_data.update({'board': board, 'url': article_url})  # 加入版面名稱資訊與網址
-        article_datas.append(article_data)  # 將文章資訊蒐集起來
-    return article_datas  # 回傳文章資訊列表
+        article = Article.objects.create(
+            board=board,
+            title=article_data["title"],
+            author=article_data["author"],
+            url=article_url,
+            content=article_data["content"],
+            post_time=article_data["post_time"]
+        )
+        article_id_list.append(article.id)
+    return article_id_list
 
 
 if __name__ == "__main__":
-    from article.models import Article
-    from django.db.utils import IntegrityError
-
-    article_datas = ptt_scrape("Gossiping")
-    for article_data in article_datas:
-        print(article_data)
-        try:
-            Article.objects.create(
-                board=article_data['board'],
-                title=article_data["title"],
-                author=article_data["author"],
-                url=article_data["url"],
-                content=article_data["content"],
-                post_time=article_data["post_time"]
-            )
-        except IntegrityError:
-            print("寫入錯誤!")
+    ptt_scrape('Gossiping')
     print('完成所有寫入!')
