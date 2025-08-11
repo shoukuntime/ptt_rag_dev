@@ -9,7 +9,13 @@ from bs4 import BeautifulSoup
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from article.models import Article
+from ptt_rag_dev.celery import app
 
+@app.task()
+def period_send_ptt_scrape_task():
+    board_list = ['Gossiping', 'NBA', 'Stock', 'LoL', 'home-sale']
+    for board in board_list:
+        ptt_scrape(board)
 
 def get_html(url: str) -> str:
     session = requests.Session()
