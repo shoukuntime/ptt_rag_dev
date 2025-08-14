@@ -12,12 +12,14 @@ from article.models import Article
 from ptt_rag_dev.celery import app
 from log_app.models import Log
 import traceback
+from celery import chain
+from celery_app.data_processing import store_data_in_pinecone
 
 @app.task()
 def period_send_ptt_scrape_task():
     board_list = ['Gossiping', 'NBA', 'Stock', 'LoL', 'home-sale']
     for board in board_list:
-        ptt_scrape(board)
+        chain(ptt_scrape.s(board), store_data_in_pinecone.s())()
 
 def get_html(url: str) -> str:
     session = requests.Session()
@@ -68,7 +70,7 @@ def get_data_from_article_html(html: str) -> dict:
     }
     return data
 
-
+@app.task()
 def ptt_scrape(board: str) -> list:
     Log.objects.create(level='INFO', category=f'scrape-{board}', message=f'開始爬取 {board}')
     board_url = 'https://www.ptt.cc/bbs/' + board + '/index.html'

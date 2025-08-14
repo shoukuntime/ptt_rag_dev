@@ -10,11 +10,12 @@ app.autodiscover_tasks()
 
 app.conf.imports = [
     "celery_app.scraper",
+    "celery_app.data_processing",
 ]
 
 app.conf.beat_schedule = {
     'scrape-every-hour': {
         'task': 'celery_app.scraper.period_send_ptt_scrape_task',
-        'schedule': 60,
+        'schedule': 3600,
     }
 }
