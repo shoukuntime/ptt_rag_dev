@@ -8,13 +8,9 @@ from .models import Article
 from .serializers import ArticleSerializer, ArticleListRequestSerializer
 import traceback
 from log_app.models import Log
-from langchain_google_genai import ChatGoogleGenerativeAI,GoogleGenerativeAIEmbeddings
 from env_settings import EnvSettings
-from langchain_pinecone import PineconeVectorStore
-from pinecone import Pinecone
-from langchain_core.prompts import PromptTemplate
-from pydantic import SecretStr
 from .serializers import QueryRequestSerializer
+from .rag_query import run_rag_query
 
 env_settings = EnvSettings()
 
@@ -42,12 +38,12 @@ class ArticleListView(APIView):
     @extend_schema(
         description="取得最新 50 篇文章，可使用 limit、offset 進行分頁，可使用作者名稱、版面、時間範圍進行過濾。",
         parameters=[
-            OpenApiParameter("limit", int, OpenApiParameter.QUERY, description="每頁返回的筆數 (預設 50)"),
-            OpenApiParameter("offset", int, OpenApiParameter.QUERY, description="從第幾筆開始 (預設 0)"),
-            OpenApiParameter("author_name", str, OpenApiParameter.QUERY, description="篩選特定發文者的文章"),
-            OpenApiParameter("board_name", str, OpenApiParameter.QUERY, description="篩選特定版面的文章"),
-            OpenApiParameter("start_date", str, OpenApiParameter.QUERY, description="篩選起始日期 (YYYY-MM-DD)", ),
-            OpenApiParameter("end_date", str, OpenApiParameter.QUERY, description="篩選結束日期 (YYYY-MM-DD)", ),
+            OpenApiParameter("limit", int, 'query', description="每頁返回的筆數 (預設 50)"),
+            OpenApiParameter("offset", int, 'query', description="從第幾筆開始 (預設 0)"),
+            OpenApiParameter("author_name", str, 'query', description="篩選特定發文者的文章"),
+            OpenApiParameter("board_name", str, 'query', description="篩選特定版面的文章"),
+            OpenApiParameter("start_date", str, 'query', description="篩選起始日期 (YYYY-MM-DD)"),
+            OpenApiParameter("end_date", str, 'query', description="篩選結束日期 (YYYY-MM-DD)"),
         ],
         responses={
             200: OpenApiResponse(
@@ -97,10 +93,10 @@ class ArticleStatisticsView(APIView):
     @extend_schema(
         description="取得文章統計資訊，支援時間範圍、作者名稱和版面過濾",
         parameters=[
-            OpenApiParameter("author_name", str, OpenApiParameter.QUERY, description="篩選特定發文者的文章"),
-            OpenApiParameter("board_name", str, OpenApiParameter.QUERY, description="篩選特定版面的文章"),
-            OpenApiParameter("start_date", str, OpenApiParameter.QUERY, description="篩選起始日期 (YYYY-MM-DD)", ),
-            OpenApiParameter("end_date", str, OpenApiParameter.QUERY, description="篩選結束日期 (YYYY-MM-DD)", ),
+            OpenApiParameter("author_name", str, 'query', description="篩選特定發文者的文章"),
+            OpenApiParameter("board_name", str, 'query', description="篩選特定版面的文章"),
+            OpenApiParameter("start_date", str, 'query', description="篩選起始日期 (YYYY-MM-DD)"),
+            OpenApiParameter("end_date", str, 'query', description="篩選結束日期 (YYYY-MM-DD)"),
         ],
         responses={
             200: OpenApiResponse(response={"type": "object", "properties": {"total_articles": {"type": "integer"}}}),
@@ -125,80 +121,13 @@ class SearchAPIView(APIView):
         responses=QueryRequestSerializer
     )
     def post(self, request):
-        import asyncio
         query_request_serializer = QueryRequestSerializer(data=request.data)
         if not query_request_serializer.is_valid():
             Log.objects.create(level='ERROR', category='user-search', message='查詢參數不合法', )
             return Response(query_request_serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         question = query_request_serializer.validated_data.get("question")
         top_k = query_request_serializer.validated_data.get("top_k")
-        # 查詢Pinecone embeddings內容
-        try:
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.set_event_loop(asyncio.new_event_loop())
-            vector_store = PineconeVectorStore(
-                index=Pinecone(
-                    api_key=env_settings.PINECONE_API_KEY
-                ).Index(env_settings.PINECONE_INDEX_NAME),
-                embedding=GoogleGenerativeAIEmbeddings(model=env_settings.GOOGLE_EMBEDDINGS_MODEL, google_api_key=SecretStr(env_settings.GOOGLE_API_KEY))
-            )
-            top_k_results = vector_store.similarity_search_with_score(question, k=top_k, )
-        except Exception as e:
-            Log.objects.create(level='ERROR', category='user-search', message=f'查詢Pinecone embeddings內容發生錯誤: {e}',
-                               traceback=traceback.format_exc())
-            return Response({"error": f"查詢Pinecone embeddings內容發生錯誤: {str(e)}"},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        # 從資料庫找出文章內容並合併
-        try:
-            match_ids = [match[0].metadata['article_id'] for match in top_k_results]
-            query_request_serializer.related_articles = Article.objects.filter(id__in=match_ids)
-            merge_text = "\n".join(
-                [f"Title:{a.title} - Content:{a.content}" for a in query_request_serializer.related_articles])
-            if len(merge_text) > 128000:
-                Log.objects.create(level='ERROR', category='user-search', message='回傳文章總字數過長，請嘗試減少top_k')
-                return Response(
-                    {"error": "回傳文章總字數過長，請嘗試減少top_k"},
-                    status=status.HTTP_400_BAD_REQUEST)
-        except (KeyError, TypeError) as e:
-            Log.objects.create(level='ERROR', category='user-search', message=f'從資料庫找出文章內容發生錯誤: {e}',
-                               traceback=traceback.format_exc())
-            return Response(
-                {"error": f"從資料庫找出文章內容發生錯誤: {str(e)}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        # 請求 ChatGPT 回答問題
-        try:
-            model = ChatGoogleGenerativeAI(
-                model="gemini-2.0-flash",
-                temperature=0,
-                google_api_key=env_settings.GOOGLE_API_KEY,
-            )
-            ptt_template = PromptTemplate(
-                input_variables=["merge_text", "question"],
-                template="""
-                根據以下PTT的文章內容以純文字回答問題：
-                ---
-                {merge_text}
-                ---
-                問題：{question}
-                """
-            )
-            chain = ptt_template | model
-            answer = chain.invoke({"merge_text": merge_text, "question": question}).content
-        except Exception as e:
-            Log.objects.create(level='ERROR', category='user-search', message=f'請求ChatGPT回答發生錯誤: {e}',
-                               traceback=traceback.format_exc())
-            return Response({"error": f"請求ChatGPT回答問題發生錯誤: {str(e)}"},
-                            status=status.HTTP_500_INTERNAL_SERVER_ERROR)
-        try:
-            serializer = QueryRequestSerializer(instance={
-                "question": question,
-                "answer": answer,
-                "related_articles": Article.objects.filter(id__in=match_ids),
-            })
-            return Response(serializer.data, status=status.HTTP_200_OK)
-        except Exception as e:
-            Log.objects.create(level='ERROR', category='user-search', message=f'序列化輸出資料失敗: {e}',
-                               traceback=traceback.format_exc())
-            return Response({'error': '序列化輸出資料失敗'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        result = run_rag_query(question, top_k)
+        if "error" in result:
+            return Response(result, status=status.HTTP_400_BAD_REQUEST)
+        return Response(result)
